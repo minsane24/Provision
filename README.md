@@ -4,6 +4,7 @@ Manufacturer: MannaAudio
 Version: 1.1 — The Performance Split Update
 
 🎹 Overview
+
 Provision is a high-efficiency MIDI FX plugin built in C++ using the JUCE framework. It is designed to transform simple one-finger input into massive, perfectly-voiced 1-5-8-10 "worship pads" while maintaining the flexibility needed for live performance.
 
 Originally conceived as a simple macro tool (formerly "WorshipChords"), Version 1.1 introduces the Performance Split Engine, allowing musicians to drive a powerful chord engine with their left hand while performing lead melodies or counter-harmonies with their right—all on a single MIDI controller.
