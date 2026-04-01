@@ -59,22 +59,25 @@ bool ProvisionAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 #endif
 
 // ==============================================================================
-int getDiatonicNote (int rootKey, bool isMinor, int degree, int originalNote)
+// 2. The Diatonic Math Helper Function (Absolute Pitch)
+// ==============================================================================
+
+int getDiatonicPitch (int scaleRootPitch, bool isMinor, int targetDegree)
 {
     int majorScale[] = {0, 2, 4, 5, 7, 9, 11};
     int minorScale[] = {0, 2, 3, 5, 7, 8, 10};
     int* scale = isMinor ? minorScale : majorScale;
 
-    int octaves = degree / 7;
-    int remainder = degree % 7;
+    int octaves = targetDegree / 7;
+    int remainder = targetDegree % 7;
     if (remainder < 0) { remainder += 7; octaves -= 1; }
 
-    int octaveBase = (originalNote / 12) * 12; // Snap to the C of the played octave
-    int rawNote = rootKey + octaveBase + (octaves * 12) + scale[remainder];
-    
+    int rawNote = scaleRootPitch + (octaves * 12) + scale[remainder];
     return std::clamp(rawNote, 0, 127); // Boundary Validation
 }
 
+// ==============================================================================
+// 3. The MIDI Logic Block
 // ==============================================================================
 void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
@@ -94,21 +97,34 @@ void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         
         if (message.isNoteOn() || message.isNoteOff())
         {
+            // 1. Calculate the Relative Pitch Class against the Root Key
             int pc = noteNumber % 12;
+            int relPc = (pc - rootKey + 12) % 12; 
             int degree = -1;
             
-            // Map white keys to diatonic scale degrees
-            switch (pc) {
-                case 0: degree = 0; break; case 2: degree = 1; break;
-                case 4: degree = 2; break; case 5: degree = 3; break;
-                case 7: degree = 4; break; case 9: degree = 5; break;
-                case 11: degree = 6; break;
+            // 2. Map the Relative Pitch to the Diatonic Scale Degree
+            if (!isMinor) {
+                switch (relPc) {
+                    case 0: degree = 0; break; case 2: degree = 1; break;
+                    case 4: degree = 2; break; case 5: degree = 3; break;
+                    case 7: degree = 4; break; case 9: degree = 5; break;
+                    case 11: degree = 6; break;
+                }
+            } else {
+                switch (relPc) {
+                    case 0: degree = 0; break; case 2: degree = 1; break;
+                    case 3: degree = 2; break; case 5: degree = 3; break;
+                    case 7: degree = 4; break; case 8: degree = 5; break;
+                    case 10: degree = 6; break;
+                }
             }
 
             bool triggerChord = false;
 
+            // 3. The Gatekeeper
             if (message.isNoteOn())
             {
+                // Only trigger if the note belongs to the scale AND is within the Split Zone
                 if (degree != -1 && noteNumber >= splitL && noteNumber <= splitH) {
                     activeChords[noteNumber] = true;
                     triggerChord = true;
@@ -116,7 +132,6 @@ void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             }
             else if (message.isNoteOff())
             {
-                // Rely strictly on internal state to resolve ghost notes
                 if (activeChords[noteNumber]) {
                     activeChords[noteNumber] = false;
                     triggerChord = true;
@@ -125,10 +140,13 @@ void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
             if (triggerChord)
             {
-                int n1 = getDiatonicNote(rootKey, isMinor, degree, noteNumber);     // Root
-                int n2 = getDiatonicNote(rootKey, isMinor, degree + 4, noteNumber); // Fifth
-                int n3 = getDiatonicNote(rootKey, isMinor, degree + 7, noteNumber); // Octave
-                int n4 = getDiatonicNote(rootKey, isMinor, degree + 9, noteNumber); // Tenth
+                // 4. Anchor the chord to the precise octave of the pressed key
+                int scaleRootPitch = noteNumber - relPc;
+
+                int n1 = getDiatonicPitch(scaleRootPitch, isMinor, degree);     // Root
+                int n2 = getDiatonicPitch(scaleRootPitch, isMinor, degree + 4); // Fifth
+                int n3 = getDiatonicPitch(scaleRootPitch, isMinor, degree + 7); // Octave
+                int n4 = getDiatonicPitch(scaleRootPitch, isMinor, degree + 9); // Tenth
 
                 juce::uint8 vel = message.getVelocity();
 
@@ -147,7 +165,7 @@ void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             }
         }
         
-        // Pass-through Gatekeeper (CC, Pitch Bend, Black keys, or Out-of-bounds notes)
+        // Pass-through Gatekeeper (CC, Pitch Bend, Non-diatonic keys, or Out-of-bounds notes)
         processedBuffer.addEvent (message, metadata.samplePosition);
     }
 
@@ -161,6 +179,8 @@ juce::AudioProcessorEditor* ProvisionAudioProcessor::createEditor()
 }
 
 bool ProvisionAudioProcessor::hasEditor() const { return true; }
+
+// We will implement these in V1.1.5 for DAW state saving
 void ProvisionAudioProcessor::getStateInformation (juce::MemoryBlock& destData) {}
 void ProvisionAudioProcessor::setStateInformation (const void* data, int sizeInBytes) {}
 
