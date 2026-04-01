@@ -2,6 +2,8 @@
 #include "PluginEditor.h"
 
 // ==============================================================================
+// 1. APVTS Parameter Setup
+// ==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout ProvisionAudioProcessor::createParameterLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
@@ -61,7 +63,6 @@ bool ProvisionAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 // ==============================================================================
 // 2. The Diatonic Math Helper Function (Absolute Pitch)
 // ==============================================================================
-
 int getDiatonicPitch (int scaleRootPitch, bool isMinor, int targetDegree)
 {
     int majorScale[] = {0, 2, 4, 5, 7, 9, 11};
@@ -97,12 +98,10 @@ void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         
         if (message.isNoteOn() || message.isNoteOff())
         {
-            // 1. Calculate the Relative Pitch Class against the Root Key
             int pc = noteNumber % 12;
             int relPc = (pc - rootKey + 12) % 12; 
             int degree = -1;
             
-            // 2. Map the Relative Pitch to the Diatonic Scale Degree
             if (!isMinor) {
                 switch (relPc) {
                     case 0: degree = 0; break; case 2: degree = 1; break;
@@ -121,10 +120,8 @@ void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
             bool triggerChord = false;
 
-            // 3. The Gatekeeper
             if (message.isNoteOn())
             {
-                // Only trigger if the note belongs to the scale AND is within the Split Zone
                 if (degree != -1 && noteNumber >= splitL && noteNumber <= splitH) {
                     activeChords[noteNumber] = true;
                     triggerChord = true;
@@ -140,7 +137,6 @@ void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
             if (triggerChord)
             {
-                // 4. Anchor the chord to the precise octave of the pressed key
                 int scaleRootPitch = noteNumber - relPc;
 
                 int n1 = getDiatonicPitch(scaleRootPitch, isMinor, degree);     // Root
@@ -161,11 +157,11 @@ void ProvisionAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                     processedBuffer.addEvent (juce::MidiMessage::noteOff (message.getChannel(), n3, vel), metadata.samplePosition);
                     processedBuffer.addEvent (juce::MidiMessage::noteOff (message.getChannel(), n4, vel), metadata.samplePosition);
                 }
-                continue; // Skip the pass-through logic below
+                continue; 
             }
         }
         
-        // Pass-through Gatekeeper (CC, Pitch Bend, Non-diatonic keys, or Out-of-bounds notes)
+        // Pass-through Gatekeeper
         processedBuffer.addEvent (message, metadata.samplePosition);
     }
 
@@ -180,9 +176,28 @@ juce::AudioProcessorEditor* ProvisionAudioProcessor::createEditor()
 
 bool ProvisionAudioProcessor::hasEditor() const { return true; }
 
-// We will implement these in V1.1.5 for DAW state saving
-void ProvisionAudioProcessor::getStateInformation (juce::MemoryBlock& destData) {}
-void ProvisionAudioProcessor::setStateInformation (const void* data, int sizeInBytes) {}
+// ==============================================================================
+// 4. DAW State Serialization (XML) - Added for V1.3
+// ==============================================================================
+void ProvisionAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
+}
+
+void ProvisionAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+
+    if (xmlState.get() != nullptr)
+    {
+        if (xmlState->hasTagName (apvts.state.getType()))
+        {
+            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+        }
+    }
+}
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
